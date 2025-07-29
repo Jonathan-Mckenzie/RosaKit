@@ -34,7 +34,7 @@ extension Array where Iterator.Element: FloatingPoint {
         return result
     }
     
-    func reflectPad(fftSize: Int) -> [Element] {
+    func zeroPad(fftSize: Int) -> [Element] {
         var array = [Element]()
         
         array.append(contentsOf: [Element].init(repeating: Element(0), count: fftSize/2))
@@ -42,6 +42,21 @@ extension Array where Iterator.Element: FloatingPoint {
         array.append(contentsOf: [Element].init(repeating: Element(0), count: fftSize/2))
 
         return array
+    }
+    
+    func reflectPad(fftSize: Int) -> [Element] {
+        let padAmount = fftSize / 2
+        guard self.count > 1 else {
+            fatalError("Input array must have at least 2 elements for reflect padding.")
+        }
+        
+        // Left pad: reflect starting after the first element (so not repeating the edge)
+        let leftPad = self[1...padAmount].reversed()
+        
+        // Right pad: reflect up to before the last element
+        let rightPad = self[(self.count - padAmount - 1)..<self.count - 1].reversed()
+
+        return Array(leftPad) + self + Array(rightPad)
     }
  
     static func linespace(start: Element, stop: Element, num: Element) -> [Element] {

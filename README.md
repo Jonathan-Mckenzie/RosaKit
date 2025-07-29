@@ -1,3 +1,6 @@
+# Fork Changes
+- reflect padding properly implemented, previous implementation renamed to zeroPad()
+
 # RosaKit
 
 RosaKit - LibRosa port to Swift for iOS and macOS platforms.

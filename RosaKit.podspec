@@ -13,7 +13,7 @@ Pod::Spec.new do |s|
   s.summary      = "RosaKit it's lightweight port to iOS libRosa"
   s.description  = "RosaKit it's lightweight port to iOS libRosa which written on Python, it's used for sound analyse"
 
-  s.homepage     = "https://github.com/dhrebeniuk/RosaKit"
+  s.homepage     = "https://github.com/Jonathan-Mckenzie/RosaKit"
 
   s.license      = "LICENSE"
   s.author             = { "Dmytro Hrebeniuk" => "dmytrohrebeniuk@gmail.com" }
@@ -22,7 +22,7 @@ Pod::Spec.new do |s|
   s.osx.deployment_target = "11.0"
   s.tvos.deployment_target = "11.0"
 
-  s.source       = { :git => "https://github.com/dhrebeniuk/RosaKit.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/Jonathan-Mckenzie/RosaKit.git", :tag => "#{s.version}" }
   s.source_files  = "Sources/**/*.{swift,h}"
 
   s.dependency 'PlainPocketFFT', '~> 0.0.9'
