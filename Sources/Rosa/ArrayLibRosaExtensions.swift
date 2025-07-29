@@ -130,7 +130,7 @@ public extension Array where Element == Double {
 
 public extension Array where Element == [(real: Double, imagine: Double)] {
     
-    func istft(hopLength inputHopLength: Int?) -> [Double] {
+    func istft(hopLength inputHopLength: Int?, normalized: Bool = false) -> [Double] {
         let nFFT = 2 * (self.count - 1)
         let winLength = nFFT
         let hopLength = inputHopLength ?? winLength / 4
@@ -161,7 +161,12 @@ public extension Array where Element == [(real: Double, imagine: Double)] {
             
             var irfftMatrix = trimmedMatrix.irfft
             
-            let ytmp = iFFTWindow.multiplyVector(matrix: irfftMatrix)
+            var ytmp = iFFTWindow.multiplyVector(matrix: irfftMatrix)
+            
+            if normalized {
+                let scale = sqrt(Double(nFFT))
+                ytmp = ytmp.map { $0.map { $0 * scale } }
+            }
             
             let ytmpIndex = frame*hopLength;
             

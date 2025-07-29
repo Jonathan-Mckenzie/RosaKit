@@ -1,5 +1,6 @@
 # Fork Changes
 - reflect padding properly implemented, previous implementation renamed to zeroPad()
+- istft now supports normalized inputs
 
 # RosaKit
 
