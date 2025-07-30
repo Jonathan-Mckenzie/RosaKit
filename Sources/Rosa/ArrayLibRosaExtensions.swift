@@ -79,7 +79,7 @@ public extension Array where Iterator.Element: FloatingPoint {
 
 public extension Array where Element == Double {
     
-    func stft(nFFT: Int = 256, hopLength: Int = 1024, isAccelerated: Bool = false) -> [[(real: Double, imagine: Double)]] {
+    func stft(nFFT: Int = 256, hopLength: Int = 1024, normalized: Bool = false, isAccelerated: Bool = false) -> [[(real: Double, imagine: Double)]] {
         let FFTWindow = [Double].getHannWindow(frameLength: (nFFT)).map { [$0] }
 
         let centered = self.reflectPad(fftSize: nFFT)
@@ -88,7 +88,7 @@ public extension Array where Element == Double {
 
         let matrix = FFTWindow.multiplyVector(matrix: yFrames)
                                         
-        let rfftMatrix = isAccelerated ? matrix.acceleratedRFFT : matrix.rfft
+        let rfftMatrix = isAccelerated ? matrix.acceleratedRFFT : matrix.rfft(nFFT: nFFT, normalized: normalized)
         
         let result = rfftMatrix
         
@@ -150,16 +150,10 @@ public extension Array where Element == [(real: Double, imagine: Double)] {
         for index in 0...(nFramesCount / nCollumns) {
             let blS = index * nCollumns
             let blT = Swift.min(blS + nCollumns, nFramesCount)
-            
-            let size = blT - blS
-            var resultArray = Array<Double>(repeating: 0.0, count: size*self.count)
-            
-            let norm = nFFT
-            let fct = 1.0 / Double(nFFT)
                  
             let trimmedMatrix = self.map { Array<(real: Double, imagine: Double)>($0[blS..<blT]) }
             
-            var irfftMatrix = trimmedMatrix.irfft
+            let irfftMatrix = trimmedMatrix.irfft
             
             var ytmp = iFFTWindow.multiplyVector(matrix: irfftMatrix)
             
@@ -269,6 +263,55 @@ extension Array where Element == [Double] {
         return result
      }
     
+    public func rfft(nFFT: Int?, normalized: Bool = false) -> [[(real: Double, imagine: Double)]] {
+        let transposed = self.transposed
+        let cols = transposed.count
+        let rows = transposed.first?.count ?? 1
+        let rfftRows = rows/2 + 1
+        
+        var flatMatrix = transposed.flatMap { $0 }
+        let rfftCount = rfftRows*cols
+        var resultComplexMatrix = [Double](repeating: 0.0, count: (rfftCount + cols + 1)*2)
+                        
+        resultComplexMatrix.withUnsafeMutableBytes { destinationData -> Void in
+            let destinationDoubleData = destinationData.bindMemory(to: Double.self).baseAddress
+            flatMatrix.withUnsafeMutableBytes { (flatData) -> Void in
+                let sourceDoubleData = flatData.bindMemory(to: Double.self).baseAddress
+                execute_real_forward(sourceDoubleData, destinationDoubleData, npy_intp(Int32(cols)), npy_intp(Int32(rows)), 1)
+            }
+        }
+
+        var realMatrix = [Double](repeating: 0.0, count: rfftCount)
+        var imagineMatrix = [Double](repeating: 0.0, count: rfftCount)
+
+        for index in 0..<rfftCount {
+            let real = resultComplexMatrix[index*2]
+            let imagine = resultComplexMatrix[index*2+1]
+            realMatrix[index] = real
+            imagineMatrix[index] = imagine
+        }
+        
+        let resultRealMatrix = realMatrix.chunked(into: rfftRows).transposed
+        let resultImagineMatrix = imagineMatrix.chunked(into: rfftRows).transposed
+
+        var scale: Double = 1.0
+        if normalized && nFFT != nil {
+            scale = 1.0 / sqrt(Double(nFFT!))
+        }
+        var result = [[(real: Double, imagine: Double)]]()
+        for row in 0..<resultRealMatrix.count {
+            let realMatrixRow = resultRealMatrix[row]
+            let imagineMatrixRow = resultImagineMatrix[row]
+            
+            var resultRow = [(real: Double, imagine: Double)]()
+            for col in 0..<realMatrixRow.count {
+                resultRow.append((real: realMatrixRow[col] * scale, imagine: imagineMatrixRow[col] * scale))
+            }
+            result.append(resultRow)
+        }
+        
+        return result
+    }
     var rfft: [[(real: Double, imagine: Double)]] {
         let transposed = self.transposed
         let cols = transposed.count
