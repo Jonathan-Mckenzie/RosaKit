@@ -81,18 +81,23 @@ public extension Array where Element == Double {
     
     func stft(nFFT: Int = 256, hopLength: Int = 1024, normalized: Bool = false, isAccelerated: Bool = false) -> [[(real: Double, imagine: Double)]] {
         let FFTWindow = [Double].getHannWindow(frameLength: (nFFT)).map { [$0] }
+        
+        // enforce the signal to be divisible exactly by the hop length
+        let length = self.count
+        let le = (length + hopLength - 1) / hopLength
+        let extra_pad = hopLength / 2 * 3
+        let extra_left_pad = extra_pad
+        let extra_right_pad = extra_pad + le * hopLength - length
 
-        let centered = self.reflectPad(fftSize: nFFT)
+        let centered = self.reflectPad(fftSize: nFFT, extraLeft: extra_left_pad, extraRight: extra_right_pad)
         
         let yFrames = centered.frame(frameLength: nFFT, hopLength: hopLength)
 
         let matrix = FFTWindow.multiplyVector(matrix: yFrames)
                                         
-        let rfftMatrix = isAccelerated ? matrix.acceleratedRFFT : matrix.rfft(nFFT: nFFT, normalized: normalized)
+        let rfftMatrix: [[(real: Double, imagine: Double)]] = isAccelerated ? matrix.acceleratedRFFT : matrix.rfft(nFFT: nFFT, extraHops: 2, normalized: normalized)
         
-        let result = rfftMatrix
-        
-        return result
+        return rfftMatrix
     }
         
     func melspectrogram(nFFT: Int = 2048, hopLength: Int = 512, sampleRate: Int = 22050, melsCount: Int = 128) -> [[Double]] {
@@ -263,7 +268,7 @@ extension Array where Element == [Double] {
         return result
      }
     
-    public func rfft(nFFT: Int?, normalized: Bool = false) -> [[(real: Double, imagine: Double)]] {
+    public func rfft(nFFT: Int?, extraHops: Int = 0, normalized: Bool = false) -> [[(real: Double, imagine: Double)]] {
         let transposed = self.transposed
         let cols = transposed.count
         let rows = transposed.first?.count ?? 1
@@ -304,7 +309,12 @@ extension Array where Element == [Double] {
             let imagineMatrixRow = resultImagineMatrix[row]
             
             var resultRow = [(real: Double, imagine: Double)]()
-            for col in 0..<realMatrixRow.count {
+            
+            // remove any time series that were apart of the additional padding
+            let colStart = extraHops
+            let colEnd = realMatrixRow.count - extraHops
+            
+            for col in colStart..<colEnd {
                 resultRow.append((real: realMatrixRow[col] * scale, imagine: imagineMatrixRow[col] * scale))
             }
             result.append(resultRow)
@@ -312,6 +322,7 @@ extension Array where Element == [Double] {
         
         return result
     }
+    
     var rfft: [[(real: Double, imagine: Double)]] {
         let transposed = self.transposed
         let cols = transposed.count

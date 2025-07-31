@@ -44,17 +44,27 @@ extension Array where Iterator.Element: FloatingPoint {
         return array
     }
     
-    func reflectPad(fftSize: Int) -> [Element] {
+    /// Reflect pads the array with customizable left and right padding.
+    /// - Parameters:
+    ///   - fftSize: Used to determine the default pad amount (fftSize/2).
+    ///   - extraLeft: Additional elements to pad on the left.
+    ///   - extraRight: Additional elements to pad on the right.
+    func reflectPad(fftSize: Int, extraLeft: Int = 0, extraRight: Int = 0) -> [Element] {
         let padAmount = fftSize / 2
+        let leftPadTotal = padAmount + extraLeft
+        let rightPadTotal = padAmount + extraRight
+
         guard self.count > 1 else {
             fatalError("Input array must have at least 2 elements for reflect padding.")
         }
-        
-        // Left pad: reflect starting after the first element (so not repeating the edge)
-        let leftPad = self[1...padAmount].reversed()
-        
+        guard leftPadTotal < self.count, rightPadTotal < self.count else {
+            fatalError("Padding amount must be less than the array count.")
+        }
+
+        // Left pad: reflect starting after the first element
+        let leftPad = self[1...leftPadTotal].reversed()
         // Right pad: reflect up to before the last element
-        let rightPad = self[(self.count - padAmount - 1)..<self.count - 1].reversed()
+        let rightPad = self[(self.count - rightPadTotal - 1)..<self.count - 1].reversed()
 
         return Array(leftPad) + self + Array(rightPad)
     }
