@@ -2,6 +2,7 @@
 - reflect padding properly implemented, previous implementation renamed to zeroPad()
 - stft, istft now supports normalized inputs
 - stft ensures nfft/4 divisible size
+- stft latency improvement (36% faster)
 
 # RosaKit
 

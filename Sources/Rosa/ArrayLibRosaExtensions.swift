@@ -77,10 +77,39 @@ public extension Array where Iterator.Element: FloatingPoint {
     }
 }
 
+func multiplyVectorAccelerated(matrix: [[Double]], vector: [Double]) -> [[Double]] {
+    guard matrix.count == vector.count else {
+        print("Error: The number of rows in the matrix must match the vector's length.")
+        return matrix
+    }
+
+    var resultMatrix: [[Double]] = []
+    resultMatrix.reserveCapacity(matrix.count)
+
+    for rowIndex in 0..<matrix.count {
+        var row = matrix[rowIndex]
+        let multiplier = vector[rowIndex]
+        var scalar = multiplier
+        
+        // Create a temporary output buffer for the result
+        var tempOutputRow = [Double](repeating: 0.0, count: row.count)
+
+        // Perform the multiplication and write the result to the temp buffer
+        vDSP_vsmulD(&row, 1, &scalar, &tempOutputRow, 1, vDSP_Length(row.count))
+        
+        // Update the original 'row' with the contents of the temp buffer
+        row = tempOutputRow
+        
+        resultMatrix.append(row)
+    }
+
+    return resultMatrix
+}
+
 public extension Array where Element == Double {
     
     func stft(nFFT: Int = 256, hopLength: Int = 1024, normalized: Bool = false, isAccelerated: Bool = false) -> [[(real: Double, imagine: Double)]] {
-        let FFTWindow = [Double].getHannWindow(frameLength: (nFFT)).map { [$0] }
+        let FFTWindow = [Double].getHannWindow(frameLength: (nFFT))
         
         // enforce the signal to be divisible exactly by the hop length
         let length = self.count
@@ -93,9 +122,9 @@ public extension Array where Element == Double {
         
         let yFrames = centered.frame(frameLength: nFFT, hopLength: hopLength)
 
-        let matrix = FFTWindow.multiplyVector(matrix: yFrames)
+        let matrix = multiplyVectorAccelerated(matrix: yFrames, vector: FFTWindow)
                                         
-        let rfftMatrix: [[(real: Double, imagine: Double)]] = isAccelerated ? matrix.acceleratedRFFT : matrix.rfft(nFFT: nFFT, extraHops: 2, normalized: normalized)
+        let rfftMatrix: [[(real: Double, imagine: Double)]] = isAccelerated ? matrix.acceleratedRFFT(nFFT: nFFT, extraHops: 2, normalized: normalized) : matrix.rfft(nFFT: nFFT, extraHops: 2, normalized: normalized)
         
         return rfftMatrix
     }
@@ -230,6 +259,54 @@ public extension Array where Element == [(real: Double, imagine: Double)] {
 
 extension Array where Element == [Double] {
     
+    func acceleratedRFFT(nFFT: Int?, extraHops: Int = 0, normalized: Bool = false) -> [[(real: Double, imagine: Double)]] {
+        let newMatrixCols = self.first?.count ?? 1
+        let newMatrixRows = self.count
+
+        let rfftRows = newMatrixRows/2 + 1
+        let rfftCount = rfftRows*newMatrixCols + newMatrixCols + 1
+
+        let flatMatrix = self.transposed.flatMap { return $0 }
+         
+        let size = (1 + newMatrixCols/2)*newMatrixRows
+        let length = vDSP_Length(pow(2, floor(log2(Float(size)))))
+
+        let setup = vDSP_DFT_zop_CreateSetupD(nil, length, vDSP_DFT_Direction.FORWARD)
+
+         let inputImaginary = [Double](repeating: 0.0, count: rfftCount)
+         var outputImaginary = [Double](repeating: 0.0, count: rfftCount)
+         var outputReal = [Double](repeating: 0.0, count: rfftCount)
+
+         vDSP_DFT_ExecuteD(setup!, flatMatrix, inputImaginary, &outputReal, &outputImaginary)
+
+        let resultRealMatrix = outputReal.chunked(into: newMatrixCols)
+        let resultImagineMatrix = outputImaginary.chunked(into: newMatrixCols)
+        
+        var scale: Double = 1.0
+        if normalized && nFFT != nil {
+            scale = 1.0 / sqrt(Double(nFFT!))
+        }
+
+        var result = [[(real: Double, imagine: Double)]]()
+        for row in 0..<rfftRows {
+            let realMatrixRow = resultRealMatrix[row]
+            let imagineMatrixRow = resultImagineMatrix[row]
+            
+            var resultRow = [(real: Double, imagine: Double)]()
+            
+            // remove any time series that were apart of the additional padding
+            let colStart = extraHops
+            let colEnd = realMatrixRow.count - extraHops
+            
+            for col in colStart..<colEnd {
+                resultRow.append((real: realMatrixRow[col] * scale, imagine: imagineMatrixRow[col] * scale))
+            }
+            result.append(resultRow)
+        }
+        
+        return result
+    }
+
     var acceleratedRFFT: [[(real: Double, imagine: Double)]] {
         let newMatrixCols = self.first?.count ?? 1
         let newMatrixRows = self.count
@@ -269,59 +346,55 @@ extension Array where Element == [Double] {
      }
     
     public func rfft(nFFT: Int?, extraHops: Int = 0, normalized: Bool = false) -> [[(real: Double, imagine: Double)]] {
-        let transposed = self.transposed
-        let cols = transposed.count
-        let rows = transposed.first?.count ?? 1
-        let rfftRows = rows/2 + 1
-        
-        var flatMatrix = transposed.flatMap { $0 }
-        let rfftCount = rfftRows*cols
-        var resultComplexMatrix = [Double](repeating: 0.0, count: (rfftCount + cols + 1)*2)
-                        
-        resultComplexMatrix.withUnsafeMutableBytes { destinationData -> Void in
-            let destinationDoubleData = destinationData.bindMemory(to: Double.self).baseAddress
-            flatMatrix.withUnsafeMutableBytes { (flatData) -> Void in
-                let sourceDoubleData = flatData.bindMemory(to: Double.self).baseAddress
-                execute_real_forward(sourceDoubleData, destinationDoubleData, npy_intp(Int32(cols)), npy_intp(Int32(rows)), 1)
+            let transposed = self.transposed
+            let cols = transposed.count
+            let rows = transposed.first?.count ?? 1
+            let rfftRows = rows / 2 + 1
+            
+            var flatMatrix = transposed.flatMap { $0 }
+            let rfftCount = rfftRows * cols
+            var resultComplexMatrix = [Double](repeating: 0.0, count: rfftCount * 2)
+                            
+            resultComplexMatrix.withUnsafeMutableBytes { destinationData -> Void in
+                let destinationDoubleData = destinationData.bindMemory(to: Double.self).baseAddress
+                flatMatrix.withUnsafeMutableBytes { (flatData) -> Void in
+                    let sourceDoubleData = flatData.bindMemory(to: Double.self).baseAddress
+                    execute_real_forward(sourceDoubleData, destinationDoubleData, npy_intp(Int32(cols)), npy_intp(Int32(rows)), 1)
+                }
             }
-        }
 
-        var realMatrix = [Double](repeating: 0.0, count: rfftCount)
-        var imagineMatrix = [Double](repeating: 0.0, count: rfftCount)
+            var scale: Double = 1.0
+            if normalized && nFFT != nil {
+                scale = 1.0 / sqrt(Double(nFFT!))
+            }
 
-        for index in 0..<rfftCount {
-            let real = resultComplexMatrix[index*2]
-            let imagine = resultComplexMatrix[index*2+1]
-            realMatrix[index] = real
-            imagineMatrix[index] = imagine
-        }
-        
-        let resultRealMatrix = realMatrix.chunked(into: rfftRows).transposed
-        let resultImagineMatrix = imagineMatrix.chunked(into: rfftRows).transposed
+            var result = [[(real: Double, imagine: Double)]]()
+            result.reserveCapacity(rfftRows)
 
-        var scale: Double = 1.0
-        if normalized && nFFT != nil {
-            scale = 1.0 / sqrt(Double(nFFT!))
-        }
-        var result = [[(real: Double, imagine: Double)]]()
-        for row in 0..<resultRealMatrix.count {
-            let realMatrixRow = resultRealMatrix[row]
-            let imagineMatrixRow = resultImagineMatrix[row]
-            
-            var resultRow = [(real: Double, imagine: Double)]()
-            
-            // remove any time series that were apart of the additional padding
             let colStart = extraHops
-            let colEnd = realMatrixRow.count - extraHops
+            let colEnd = cols - extraHops
             
-            for col in colStart..<colEnd {
-                resultRow.append((real: realMatrixRow[col] * scale, imagine: imagineMatrixRow[col] * scale))
+            // Loop through the rfft rows on the outer loop
+            for rfftRow in 0..<rfftRows {
+                var resultRow = [(real: Double, imagine: Double)]()
+                resultRow.reserveCapacity(colEnd - colStart)
+                
+                // Loop through the columns on the inner loop
+                for col in colStart..<colEnd {
+                    // Calculate the flat index for the transposed matrix
+                    let index = (col * rfftRows + rfftRow) * 2
+                    
+                    let real = resultComplexMatrix[index]
+                    let imagine = resultComplexMatrix[index + 1]
+                    
+                    resultRow.append((real: real * scale, imagine: imagine * scale))
+                }
+                
+                result.append(resultRow)
             }
-            result.append(resultRow)
+            
+            return result
         }
-        
-        return result
-    }
     
     var rfft: [[(real: Double, imagine: Double)]] {
         let transposed = self.transposed

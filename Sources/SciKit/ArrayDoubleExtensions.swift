@@ -68,30 +68,24 @@ extension Array where Iterator.Element: FloatingPoint {
 }
 
 extension Array where Iterator.Element == Double {
-            
+        
     func frame(frameLength: Int = 2048, hopLength: Int = 512) -> [[Element]] {
-        let framesCount = 1 + (self.count - frameLength) / hopLength
-        let strides = MemoryLayout.size(ofValue: Double(0))
+        let framesCount = Swift.max(0, 1 + (count - frameLength) / hopLength)
+        guard framesCount > 0, frameLength > 0, hopLength > 0 else { return [] }
         
-        let outputShape = (width: self.count - frameLength + 1, height: frameLength)
-        let outputStrides = (xStride: strides*hopLength, yStride: strides)
-                
-        let verticalSize = Int(ceil(Float(outputShape.width)/Float(hopLength)))
-              
-        var xw = [[Double]]()
+        var result = [[Element]](repeating: [Element](repeating: Element.zero, count: frameLength), count: framesCount)
         
-        for yIndex in 0..<verticalSize {
-            var lineArray = [Double]()
-
-            for xIndex in 0..<frameLength {
-                let value = self[((yIndex*hopLength)+xIndex)%self.count]
-                
-                lineArray.append(value)
+        for frameIndex in 0..<framesCount {
+            let start = frameIndex * hopLength
+            let end = Swift.min(start + frameLength, count)
+            result[frameIndex] = Array(self[start..<end])
+            // Pad with zeros if needed
+            if end - start < frameLength {
+                result[frameIndex].append(contentsOf: [Element](repeating: Element.zero, count: frameLength - (end - start)))
             }
-            xw.append(lineArray)
         }
         
-        return xw.transposed
+        return result.transposed
     }
                                        
 }
