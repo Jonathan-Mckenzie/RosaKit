@@ -164,12 +164,12 @@ public extension Array where Element == Double {
 
 public extension Array where Element == [(real: Double, imagine: Double)] {
     
-    func istft(hopLength inputHopLength: Int?, normalized: Bool = false) -> [Double] {
+    func istft(hopLength inputHopLength: Int?, normalized: Bool = false, winSQ: [Double]) -> [Double] {
         let nFFT = 2 * (self.count - 1)
         let winLength = nFFT
         let hopLength = inputHopLength ?? winLength / 4
 
-        let iFFTWindow = [Double].getHannWindow(frameLength: nFFT).map { [$0] }
+        let iFFTWindow = [Double].getHannWindow(frameLength: nFFT)
         
         let nFramesCount = self[0].count
 
@@ -180,17 +180,15 @@ public extension Array where Element == [(real: Double, imagine: Double)] {
         var y = Array<Double>(repeating: 0.0, count: expectedSignalLen)
         
         var frame = 0
-        
-        for index in 0...(nFramesCount / nCollumns) {
+        let count = nFramesCount / nCollumns
+
+        for index in 0...count {
             let blS = index * nCollumns
             let blT = Swift.min(blS + nCollumns, nFramesCount)
                  
             let trimmedMatrix = self.map { Array<(real: Double, imagine: Double)>($0[blS..<blT]) }
-            
             let irfftMatrix = trimmedMatrix.irfft
-            
-            var ytmp = iFFTWindow.multiplyVector(matrix: irfftMatrix)
-            
+            var ytmp = multiplyVectorAccelerated(matrix: irfftMatrix, vector: iFFTWindow)
             if normalized {
                 let scale = sqrt(Double(nFFT))
                 ytmp = ytmp.map { $0.map { $0 * scale } }
@@ -202,59 +200,72 @@ public extension Array where Element == [(real: Double, imagine: Double)] {
             for frameIndex in 0..<ytmpCollumns {
                 let sample = frameIndex * hopLength
                 let yDiff = ytmp.flatMap { $0[frameIndex] }
-                for index in 0..<yDiff.count {
-                    y[ytmpIndex + sample + index] += yDiff[index]
+                let offset = ytmpIndex + sample
+                y[offset..<(offset + yDiff.count)].withUnsafeMutableBufferPointer { yPtr in
+                    yDiff.withUnsafeBufferPointer { diffPtr in
+                        vDSP_vaddD(diffPtr.baseAddress!, 1, yPtr.baseAddress!, 1, yPtr.baseAddress!, 1, vDSP_Length(yDiff.count))
+                    }
                 }
             }
-            
+
             frame += blT - blS
         }
-        
-        let winSQ = [Double].windowHannSumsquare(nFrames: nFramesCount, winLength: winLength, nFFt: nFFT, hopLength: hopLength)
-        
-        for index in 0..<winSQ.count {
-            if winSQ[index] > Double.leastNonzeroMagnitude {
-                y[index] /= (winSQ[index]);
+
+        var result: [Double] = Array<Double>(repeating: 0.0, count: y.count)
+        y.withUnsafeBufferPointer { yPtr in
+            winSQ.withUnsafeBufferPointer { safeWinSQPtr in
+                result.withUnsafeMutableBufferPointer { resultPtr in
+                    vDSP_vdivD(safeWinSQPtr.baseAddress!, 1, yPtr.baseAddress!, 1, resultPtr.baseAddress!, 1, vDSP_Length(y.count))
+                }
             }
         }
-        
+        y = result
+
         return y
     }
-  
+    
     var irfft: [[Double]] {
         let invNorm = (self.count - 1) * 2
         let cols = self.count
         let rows = self.first?.count ?? 0
+        let fct = 1.0 / Double(invNorm)
         
-        var slicedMatrix = Array<Array<(real: Double, imagine: Double)>>(repeating: Array<(real: Double, imagine: Double)>(repeating: (real: 0.0, imagine: 0.0), count: rows), count: invNorm);
-        
-        for colIndex in 0..<cols {
-            for rowIndex in 0..<rows {
-                slicedMatrix[colIndex][rowIndex] = self[colIndex][rowIndex]
+        let totalElements = rows * invNorm * 2 // 15 * 4096 * 2 = 122880
+
+        // Pre-allocate the final array to prevent re-allocations
+        var stftChunk = Array<Double>(repeating: 0.0, count: totalElements)
+
+        for rowIndex in 0..<rows {
+            for colIndex in 0..<cols {
+                let complexValue = self[colIndex][rowIndex]
+                let realIndex = (rowIndex * invNorm + colIndex) * 2
+                stftChunk[realIndex] = complexValue.real
+                stftChunk[realIndex + 1] = complexValue.imagine
+            }
+
+            // Handle padding with zeros for the remaining columns
+            for colIndex in cols..<invNorm {
+                let realIndex = (rowIndex * invNorm + colIndex) * 2
+                stftChunk[realIndex] = 0.0
+                stftChunk[realIndex + 1] = 0.0
             }
         }
-        
-        slicedMatrix = slicedMatrix.transposed
-        
-        let fct = 1.0 / Double(invNorm)
-
-        var stftChunk = slicedMatrix.map { $0.flatMap { [$0.real, $0.imagine] } } .flatMap { $0.flatMap { $0 } }
 
         var resultArray = [Double].init(repeating: 0.0, count: invNorm*rows)
         stftChunk.withUnsafeMutableBytes { stftChunkData -> Void in
             let stftChunkDataDoubleData = stftChunkData.bindMemory(to: Double.self).baseAddress
             resultArray.withUnsafeMutableBytes { (resultArrayFlatData) -> Void in
                 let destinationDoubleData = resultArrayFlatData.bindMemory(to: Double.self).baseAddress
-                execute_real_backward(stftChunkDataDoubleData, destinationDoubleData, npy_intp(slicedMatrix.count), npy_intp(slicedMatrix.first?.count ?? 0), fct)
+                execute_real_backward(stftChunkDataDoubleData, destinationDoubleData, npy_intp(rows), npy_intp(invNorm), fct)
             }
         }
-        
-        let backSTFT = resultArray.chunked(into: slicedMatrix.first?.count ?? 0)
-        
+
+        let backSTFT = resultArray.chunked(into: invNorm)
         let backSTFTTransposed = backSTFT.transposed
         
         return backSTFTTransposed
     }
+
 }
 
 extension Array where Element == [Double] {
