@@ -108,9 +108,7 @@ func multiplyVectorAccelerated(matrix: [[Double]], vector: [Double]) -> [[Double
 
 public extension Array where Element == Double {
     
-    func stft(nFFT: Int = 256, hopLength: Int = 1024, normalized: Bool = false, isAccelerated: Bool = false) -> [[(real: Double, imagine: Double)]] {
-        let FFTWindow = [Double].getHannWindow(frameLength: (nFFT))
-        
+    func stft(nFFT: Int = 256, hopLength: Int = 1024, normalized: Bool = false, isAccelerated: Bool = false, FFTWindow: [Double]) -> [[(real: Double, imagine: Double)]] {
         // enforce the signal to be divisible exactly by the hop length
         let length = self.count
         let le = (length + hopLength - 1) / hopLength
@@ -130,7 +128,7 @@ public extension Array where Element == Double {
     }
         
     func melspectrogram(nFFT: Int = 2048, hopLength: Int = 512, sampleRate: Int = 22050, melsCount: Int = 128) -> [[Double]] {
-        let spectrogram = self.stft(nFFT: nFFT, hopLength: hopLength)
+        let spectrogram = self.stft(nFFT: nFFT, hopLength: hopLength, FFTWindow: [Double].getHannWindow(frameLength: (nFFT)))
             .map { $0.map { sqrt(pow($0.real, 2.0) + pow($0.imagine, 2.0)) } }
         let melBasis = [Double].createMelFilter(sampleRate: sampleRate, FTTCount: nFFT, melsCount: melsCount)
         return melBasis.dot(matrix: spectrogram)
@@ -164,13 +162,11 @@ public extension Array where Element == Double {
 
 public extension Array where Element == [(real: Double, imagine: Double)] {
     
-    func istft(hopLength inputHopLength: Int?, normalized: Bool = false, winSQ: [Double]) -> [Double] {
+    func istft(hopLength inputHopLength: Int?, normalized: Bool = false, winSQ: [Double], iFFTWindow: [Double]) -> [Double] {
         let nFFT = 2 * (self.count - 1)
         let winLength = nFFT
         let hopLength = inputHopLength ?? winLength / 4
-
-        let iFFTWindow = [Double].getHannWindow(frameLength: nFFT)
-        
+    
         let nFramesCount = self[0].count
 
         let expectedSignalLen = nFFT + hopLength * (nFramesCount - 1)
